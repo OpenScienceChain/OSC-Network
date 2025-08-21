@@ -1,0 +1,13 @@
+# Fabric ephemeral output
+test-network/organizations/
+test-network/packagedChaincode/
+**/*.tar.gz
+
+# Wallets, crypto, build artifacts
+**/wallet/
+**/build/
+**/vendor/
+
+# IDE/editor
+.vscode/
+.idea/
