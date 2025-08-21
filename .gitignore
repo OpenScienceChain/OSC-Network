@@ -11,6 +11,6 @@ test-network/packagedChaincode/
 # IDE/editor
 .vscode/
 .idea/
-bin/
-config/
+/bin/
+/config/
 
