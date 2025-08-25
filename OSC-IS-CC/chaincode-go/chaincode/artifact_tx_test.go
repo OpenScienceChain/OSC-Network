@@ -57,8 +57,7 @@ func TestCreateArtifact_Success_DefaultsAndState(t *testing.T) {
     var stored Artifact
     require.NoError(t, json.Unmarshal(wrote, &stored))
     // verified defaults to false
-    require.NotNil(t, stored.Verified)
-    require.Equal(t, false, *stored.Verified)
+    require.Equal(t, false, stored.Verified)
     require.Equal(t, SubmissionStateSuccess, stored.SubmissionState)
 }
 

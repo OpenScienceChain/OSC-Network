@@ -10,6 +10,12 @@ import (
     "github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
 
+// SmartContract provides functions for managing an Asset
+type SmartContract struct {
+	contractapi.Contract
+}
+
+
 // Constants for artifact submission states
 const (
     SubmissionStatePending SubmissionState = "PENDING"
@@ -62,9 +68,12 @@ func (s *SmartContract) CreateArtifact(ctx contractapi.TransactionContextInterfa
     }
 
     // Default verified to false if not provided
-    if artifact.Verified == nil {
-        v := false
-        artifact.Verified = &v
+    // Default verified to false if not provided (zero-value already false). Nothing to do.
+    if artifact.Dois == nil {
+        artifact.Dois = []string{}
+    }
+    if artifact.FundingAgencies == nil {
+        artifact.FundingAgencies = []string{}
     }
 
     // Ensure key uniqueness
