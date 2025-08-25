@@ -32,3 +32,5 @@ install-fabric.sh
 
 # override the ignore of all config/ folders
 !full-stack-asset-transfer-guide/infrastructure/sample-network/config
+
+ci/scripts/*.Identifier
