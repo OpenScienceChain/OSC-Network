@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+
 # Ensure secrets/args are not echoed even if called with bash -x
 set +x
 
@@ -43,6 +43,9 @@ need_tool fabric-ca-client
 need_tool jq
 
 mkdir -p "$WALLETS_DIR"
+
+$VERBOSE && echo "Scanning peer orgs under: $PEER_ORGS_DIR"
+shopt -s nullglob
 
 titlecase() { awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}' <<<"$1"; }
 
@@ -111,11 +114,17 @@ ensure_admin_enrolled() {
   echo "Enrolling CA admin (admin:adminpw) for org${org_num}"
   export FABRIC_CA_CLIENT_HOME="$org_home"
   export FABRIC_CA_CLIENT_TLS_CERTFILES="$ca_tls_cert"
-  eval "fabric-ca-client enroll -u https://admin:adminpw@localhost:${ca_port} --caname $ca_name -M \"$org_home/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR"
+  if ! eval "fabric-ca-client enroll -u https://admin:adminpw@localhost:${ca_port} --caname $ca_name -M \"$org_home/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR"; then
+    echo "Warning: failed to enroll CA admin for org${org_num}." >&2
+    return 1
+  fi
 }
 
-for org_path in "$PEER_ORGS_DIR"/*; do
+org_paths=("$PEER_ORGS_DIR"/*)
+if $VERBOSE; then printf 'Found org paths: %s\n' "${org_paths[*]}"; fi
+for org_path in "${org_paths[@]}"; do
   [[ -d "$org_path" ]] || continue
+  $VERBOSE && echo "--- Processing org path: $org_path"
   org_domain=$(basename "$org_path")                    # org1.example.com
   org_num=$(derive_org_num "$org_domain")               # 1, 2, ...
   msp_id=$(derive_msp_id "$org_domain")
@@ -133,7 +142,10 @@ for org_path in "$PEER_ORGS_DIR"/*; do
   svc_secret=$(choose_secret "$org_num")
 
   # Ensure admin MSP exists; required for register
-  ensure_admin_enrolled "$org_num" "$org_home" "$ca_port" "$ca_name" "$ca_tls_cert"
+  if ! ensure_admin_enrolled "$org_num" "$org_home" "$ca_port" "$ca_name" "$ca_tls_cert"; then
+    echo "Skipping org${org_num} due to CA admin enrollment failure." >&2
+    continue
+  fi
 
   if [[ ! -f "$ca_tls_cert" ]]; then
     echo "CA TLS cert not found for $org_domain at $ca_tls_cert; skipping" >&2
@@ -146,14 +158,22 @@ for org_path in "$PEER_ORGS_DIR"/*; do
     export FABRIC_CA_CLIENT_HOME="$org_home"
     export FABRIC_CA_CLIENT_URL="$ca_url"
     export FABRIC_CA_CLIENT_TLS_CERTFILES="$ca_tls_cert"
-    eval "fabric-ca-client register --caname \"$ca_name\" --id.name \"$svc_name\" --id.secret \"$svc_secret\" --id.type client --id.affiliation \"org${org_num}.department1\" --tls.certfiles \"$ca_tls_cert\" $REDIR" || true
+    reg_ok=true
+    if eval "fabric-ca-client register --caname \"$ca_name\" --id.name \"$svc_name\" --id.secret \"$svc_secret\" --id.type client --id.affiliation \"org${org_num}.department1\" --tls.certfiles \"$ca_tls_cert\" $REDIR"; then
+      $VERBOSE && echo "Register OK for $svc_name"
+    else
+      reg_ok=false
+      $VERBOSE && echo "Register failed for $svc_name (may already exist)"
+    fi
 
     echo "Enrolling service user $svc_name"
-    eval "fabric-ca-client enroll -u https://$svc_name:$svc_secret@localhost:${ca_port} --caname $ca_name -M \"$svc_user_dir/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR"
+    if ! eval "fabric-ca-client enroll -u https://$svc_name:$svc_secret@localhost:${ca_port} --caname $ca_name -M \"$svc_user_dir/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR"; then
+      $VERBOSE && echo "Enroll failed for $svc_name (will try fallback if needed)"
+    fi
 
     # Verify enrollment produced MSP materials
-    if [[ ! -f "$svc_user_dir/msp/signcerts/cert.pem" ]] && [[ -z $(ls -1 "$svc_user_dir/msp/signcerts"/*.pem 2>/dev/null | head -n1) ]]; then
-      echo "Enrollment did not produce signcerts for $svc_name at $svc_user_dir/msp. Trying a fresh service user..." >&2
+    if [[ "$reg_ok" == false || ( ! -f "$svc_user_dir/msp/signcerts/cert.pem" && -z $(ls -1 "$svc_user_dir/msp/signcerts"/*.pem 2>/dev/null | head -n1) ) ]]; then
+      echo "Registration or enrollment failed for $svc_name. Trying a fresh service user label..." >&2
       # Fallback: create a fresh service user label to avoid unknown prior secret
       fallback_label="svc-org${org_num}-$(date +%s)"
       fallback_secret="${fallback_label}pw"
