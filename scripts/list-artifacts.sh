@@ -50,7 +50,28 @@ setGlobals 1
 
 echo "Querying ListArtifacts..."
 QUERY_CALL='{"Args":["ListArtifacts"]}'
-peer chaincode query -C "$CHANNEL_NAME" -n "$CC_NAME" -c "$QUERY_CALL" | jq .
+RAW_JSON=$(peer chaincode query -C "$CHANNEL_NAME" -n "$CC_NAME" -c "$QUERY_CALL")
+
+# Pretty print the artifacts JSON
+echo "$RAW_JSON" | jq .
+
+# Normalize artifacts into an array for counting
+ARTIFACTS_ARRAY=$(echo "$RAW_JSON" | jq -c 'if type=="array" then . 
+  elif (type=="object" and has("records") and (.records|type=="array")) then .records 
+  elif (type=="object" and has("items") and (.items|type=="array")) then .items 
+  elif (type=="object" and has("result") and (.result|type=="array")) then .result 
+  elif (type=="object" and has("data") and (.data|type=="array")) then .data 
+  else [] end')
+
+# Compute totals
+COUNT=$(echo "$ARTIFACTS_ARRAY" | jq 'length')
+SUCCESS_COUNT=$(echo "$ARTIFACTS_ARRAY" | jq '[.[] | select(.submissionState == "SUCCESS")] | length')
+FAILED_COUNT=$(echo "$ARTIFACTS_ARRAY" | jq '[.[] | select(.submissionState == "FAILED")] | length')
+
+echo
+echo "Total artifacts: $COUNT"
+echo "Successful transactions: $SUCCESS_COUNT"
+echo "Failed transactions: $FAILED_COUNT"
 
 echo "Done."
 
