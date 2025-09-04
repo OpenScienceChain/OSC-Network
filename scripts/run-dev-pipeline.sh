@@ -53,6 +53,9 @@ run_step "Deploying CCaaS (ccName=$CC_NAME, channel=$CHANNEL_NAME)" \
 run_step "Seeding and listing artifacts (ccName=$CC_NAME, channel=$CHANNEL_NAME)" \
   "$ROOTDIR/scripts/seed-and-list-artifacts.sh" -c "$CHANNEL_NAME" -n "$CC_NAME"
 
+run_step "Sanity: random artifact 20 updates + history (ccName=$CC_NAME, channel=$CHANNEL_NAME)" \
+  "$ROOTDIR/scripts/sanity-artifact-update-history.sh" -c "$CHANNEL_NAME" -n "$CC_NAME" -u 20
+
 run_step "Creating service wallets for all orgs" \
   "$ROOTDIR/scripts/create-service-wallets.sh"
 
