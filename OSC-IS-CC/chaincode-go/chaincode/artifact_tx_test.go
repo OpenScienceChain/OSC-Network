@@ -70,7 +70,8 @@ func TestCreateArtifact_InvalidJSON(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCreateArtifact_InvalidUUID(t *testing.T) {
+// UUID format is no longer enforced; ensure create does not fail for non-UUID ids.
+func TestCreateArtifact_DoesNotEnforceUUID(t *testing.T) {
 	sc := &SmartContract{}
 	stub := &mocks.ChaincodeStub{}
 	stub.GetStateReturns(nil, nil)
@@ -80,29 +81,30 @@ func TestCreateArtifact_InvalidUUID(t *testing.T) {
 	art.ID = "not-a-uuid"
 	payload, _ := json.Marshal(art)
 	_, err := sc.CreateArtifact(ctx, string(payload))
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
-func TestCreateArtifact_TitleAndDescriptionLengths(t *testing.T) {
+func TestCreateArtifact_TitleAndDescriptionRequired(t *testing.T) {
 	sc := &SmartContract{}
 	stub := &mocks.ChaincodeStub{}
 	stub.GetStateReturns(nil, nil)
 	ctx := newContextWithStub(stub)
 
 	art := buildValidArtifact()
-	art.Title = "ab"
+	art.Title = ""
 	payload, _ := json.Marshal(art)
 	_, err := sc.CreateArtifact(ctx, string(payload))
 	require.Error(t, err)
 
 	art = buildValidArtifact()
-	art.Description = "too short"
+	art.Description = ""
 	payload, _ = json.Marshal(art)
 	_, err = sc.CreateArtifact(ctx, string(payload))
 	require.Error(t, err)
 }
 
-func TestCreateArtifact_EmailUsernameFootprintValidation(t *testing.T) {
+// Email/username/footprint are no longer validated at chaincode level.
+func TestCreateArtifact_RelaxedIdentityFields(t *testing.T) {
 	sc := &SmartContract{}
 	stub := &mocks.ChaincodeStub{}
 	stub.GetStateReturns(nil, nil)
@@ -112,18 +114,45 @@ func TestCreateArtifact_EmailUsernameFootprintValidation(t *testing.T) {
 	art.SubmitterEmail = "invalid-email"
 	payload, _ := json.Marshal(art)
 	_, err := sc.CreateArtifact(ctx, string(payload))
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	art = buildValidArtifact()
 	art.SubmitterUsername = ""
 	payload, _ = json.Marshal(art)
 	_, err = sc.CreateArtifact(ctx, string(payload))
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	art = buildValidArtifact()
 	art.Footprint = "abc"
 	payload, _ = json.Marshal(art)
 	_, err = sc.CreateArtifact(ctx, string(payload))
+	require.NoError(t, err)
+}
+
+func TestCreateArtifact_LongAcknowledgements(t *testing.T) {
+	sc := &SmartContract{}
+	stub := &mocks.ChaincodeStub{}
+	stub.GetStateReturns(nil, nil)
+	ctx := newContextWithStub(stub)
+
+	art := buildValidArtifact()
+	art.Acknowledgements = strings.Repeat("x", 3001)
+	payload, _ := json.Marshal(art)
+	_, err := sc.CreateArtifact(ctx, string(payload))
+	require.Error(t, err)
+}
+
+func TestValidateLinks_LengthExceeded(t *testing.T) {
+	// Combined length > linksCombinedMaxLen should error
+	long := strings.Repeat("a", linksCombinedMaxLen+1)
+	err := validateLinks([]string{long})
+	require.Error(t, err)
+}
+
+func TestValidateKeywords_LengthExceeded(t *testing.T) {
+	// Combined length > keywordsCombinedMaxLen should error
+	long := strings.Repeat("k", keywordsCombinedMaxLen+1)
+	err := validateKeywords([]string{long})
 	require.Error(t, err)
 }
 

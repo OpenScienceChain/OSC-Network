@@ -37,3 +37,4 @@ ci/scripts/*.Identifier
 OSC-IS-CC/chaincode-go/chaincode-go
 
 wallets/
+OSC-IS-CC/chaincode-go/coverage.out

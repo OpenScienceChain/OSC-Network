@@ -106,20 +106,31 @@ func TestUpdateArtifactDetails_UnknownFieldAndValidationErrors(t *testing.T) {
 	_, err := sc.UpdateArtifactDetails(ctx, stored.ID, `{"bogus":1}`)
 	require.Error(t, err)
 
-	// bad URL
+	// links and dois format are no longer validated at chaincode level; should not error
 	_, err = sc.UpdateArtifactDetails(ctx, stored.ID, `{"links":["notaurl"]}`)
-	require.Error(t, err)
+	require.NoError(t, err)
 
-	// bad DOI
 	_, err = sc.UpdateArtifactDetails(ctx, stored.ID, `{"dois":["xyz"]}`)
-	require.Error(t, err)
+	require.NoError(t, err)
 
-	// bad footprint
+	// footprint format no longer validated; should not error
 	_, err = sc.UpdateArtifactDetails(ctx, stored.ID, `{"footprint":"abc"}`)
-	require.Error(t, err)
+	require.NoError(t, err)
 
-	// long acknowledgements
+	// long acknowledgements still errors
 	_, err = sc.UpdateArtifactDetails(ctx, stored.ID, `{"acknowledgements":"`+strings.Repeat("x", 3001)+`"}`)
+	require.Error(t, err)
+}
+
+func TestUpdateArtifactDetails_EmptyManifestRejected(t *testing.T) {
+	sc := &SmartContract{}
+	stub := &mocks.ChaincodeStub{}
+	stored := buildStoredArtifact()
+	bStored, _ := json.Marshal(stored)
+	stub.GetStateReturns(bStored, nil)
+	ctx := newTxContext(stub)
+
+	_, err := sc.UpdateArtifactDetails(ctx, stored.ID, `{"manifest":[]}`)
 	require.Error(t, err)
 }
 

@@ -3,8 +3,6 @@ package chaincode
 import (
 	"encoding/json"
 	"fmt"
-	"net/mail"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -25,9 +23,7 @@ const (
 )
 
 var (
-	uuidPattern      = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`)
-	sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	doiPattern       = regexp.MustCompile(`^10\.\d{4,9}/[-._;()/:A-Za-z0-9]+$`)
+	uuidPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`)
 )
 
 const (
@@ -52,38 +48,12 @@ type ArtifactUpdate struct {
 	SubmissionState  *SubmissionState `json:"submissionState"`
 }
 
-func isValidHTTPURL(u string) bool {
-	parsed, err := url.ParseRequestURI(strings.TrimSpace(u))
-	if err != nil {
-		return false
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return false
-	}
-	if parsed.Host == "" {
-		return false
-	}
-	return true
-}
-
 func validateLinks(links []string) error {
 	total := 0
 	for _, l := range links {
-		if !isValidHTTPURL(l) {
-			return fmt.Errorf("links must be valid URLs (http/https): %s", l)
-		}
 		total += len(l)
 		if total > linksCombinedMaxLen {
 			return fmt.Errorf("combined links length must be ≤ %d characters", linksCombinedMaxLen)
-		}
-	}
-	return nil
-}
-
-func validateDois(dois []string) error {
-	for _, d := range dois {
-		if !doiPattern.MatchString(strings.TrimSpace(d)) {
-			return fmt.Errorf("invalid DOI format: %s", d)
 		}
 	}
 	return nil
@@ -100,25 +70,22 @@ func validateKeywords(keywords []string) error {
 	return nil
 }
 
-func validateManifestItems(manifest []ManifestItem) error {
-	for _, m := range manifest {
-		if strings.TrimSpace(m.Filename) == "" {
-			return fmt.Errorf("manifest filename is required")
-		}
-		if strings.TrimSpace(m.Algorithm) == "" {
-			return fmt.Errorf("manifest algorithm is required")
-		}
-		hash := strings.ToLower(strings.TrimSpace(m.Hash))
-		if !sha256HexPattern.MatchString(hash) {
-			return fmt.Errorf("manifest hash must be a 64-character lowercase hex string")
+// normalizeStringSlice trims whitespace from each element and drops empty results.
+// This allows clients to submit arrays that may contain empty strings or whitespace-only
+// entries without causing validation failures downstream.
+func normalizeStringSlice(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		trimmed := strings.TrimSpace(it)
+		if trimmed != "" {
+			out = append(out, trimmed)
 		}
 	}
-	return nil
+	return out
 }
 
-func isValidSubmissionState(s SubmissionState) bool {
-	return s == SubmissionStatePending || s == SubmissionStateFailed || s == SubmissionStateSuccess
-}
+// No per-item manifest validation is enforced here; we only require that the
+// manifest list itself is non-empty when provided.
 
 // CreateArtifact stores a new artifact on the ledger. The input must be a JSON string
 // matching the Artifact struct shape. The function validates core constraints and
@@ -131,32 +98,13 @@ func (s *SmartContract) CreateArtifact(ctx contractapi.TransactionContextInterfa
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	// Validate basic fields
+	// Validate basic fields (relaxed): only ensure title/description are non-empty after trim
 	artifact.ID = strings.TrimSpace(strings.ToLower(artifact.ID))
-	if !uuidPattern.MatchString(artifact.ID) {
-		return nil, fmt.Errorf("id must be a UUID (lowercase, canonical form)")
+	if strings.TrimSpace(artifact.Title) == "" {
+		return nil, fmt.Errorf("title is required")
 	}
-
-	if l := len(strings.TrimSpace(artifact.Title)); l < 3 || l > 200 {
-		return nil, fmt.Errorf("title must be between 3 and 200 characters")
-	}
-
-	if l := len(strings.TrimSpace(artifact.Description)); l < 50 || l > 3000 {
-		return nil, fmt.Errorf("description must be between 50 and 3000 characters")
-	}
-
-	// Email validation (minimal but robust using stdlib)
-	if _, err := mail.ParseAddress(strings.TrimSpace(artifact.SubmitterEmail)); err != nil {
-		return nil, fmt.Errorf("submitterEmail must be a valid email address")
-	}
-	if strings.TrimSpace(artifact.SubmitterUsername) == "" {
-		return nil, fmt.Errorf("submitterUsername is required")
-	}
-
-	// Footprint must be a 64-char lowercase hex string
-	artifact.Footprint = strings.TrimSpace(strings.ToLower(artifact.Footprint))
-	if !sha256HexPattern.MatchString(artifact.Footprint) {
-		return nil, fmt.Errorf("footprint must be a 64-character lowercase hex string")
+	if strings.TrimSpace(artifact.Description) == "" {
+		return nil, fmt.Errorf("description is required")
 	}
 
 	// Default verified to false if not provided
@@ -172,6 +120,30 @@ func (s *SmartContract) CreateArtifact(ctx contractapi.TransactionContextInterfa
 	}
 	if artifact.Links == nil {
 		artifact.Links = []string{}
+	}
+
+	// Normalize slice fields to allow whitespace-only entries to be treated as empty
+	artifact.Dois = normalizeStringSlice(artifact.Dois)
+	artifact.FundingAgencies = normalizeStringSlice(artifact.FundingAgencies)
+	artifact.Keywords = normalizeStringSlice(artifact.Keywords)
+	artifact.Links = normalizeStringSlice(artifact.Links)
+
+	// Trim acknowledgements and enforce max length only when non-empty
+	artifact.Acknowledgements = strings.TrimSpace(artifact.Acknowledgements)
+	if artifact.Acknowledgements != "" && len(artifact.Acknowledgements) > acknowledgementsMaxLen {
+		return nil, fmt.Errorf("acknowledgements must be ≤ %d characters", acknowledgementsMaxLen)
+	}
+
+	// Apply relaxed validations: only length checks for links/keywords; acknowledgements length above
+	if err := validateLinks(artifact.Links); err != nil {
+		return nil, err
+	}
+	if err := validateKeywords(artifact.Keywords); err != nil {
+		return nil, err
+	}
+	// Manifest must be present and non-empty
+	if len(artifact.Manifest) == 0 {
+		return nil, fmt.Errorf("manifest is required and must contain at least one item")
 	}
 
 	// Ensure key uniqueness
@@ -296,21 +268,24 @@ func (s *SmartContract) UpdateArtifactDetails(ctx contractapi.TransactionContext
 
 	// Merge fields if provided
 	if upd.Keywords != nil {
-		updated.Keywords = *upd.Keywords
+		updated.Keywords = normalizeStringSlice(*upd.Keywords)
 	}
 	if upd.Links != nil {
-		updated.Links = *upd.Links
+		updated.Links = normalizeStringSlice(*upd.Links)
 	}
 	if upd.Dois != nil {
-		updated.Dois = *upd.Dois
+		updated.Dois = normalizeStringSlice(*upd.Dois)
 	}
 	if upd.FundingAgencies != nil {
-		updated.FundingAgencies = *upd.FundingAgencies
+		updated.FundingAgencies = normalizeStringSlice(*upd.FundingAgencies)
 	}
 	if upd.Acknowledgements != nil {
 		updated.Acknowledgements = strings.TrimSpace(*upd.Acknowledgements)
 	}
 	if upd.Manifest != nil {
+		if len(*upd.Manifest) == 0 {
+			return nil, fmt.Errorf("manifest must contain at least one item")
+		}
 		updated.Manifest = *upd.Manifest
 	}
 	if upd.Footprint != nil {
@@ -326,9 +301,6 @@ func (s *SmartContract) UpdateArtifactDetails(ctx contractapi.TransactionContext
 		updated.LastTimeVerified = upd.LastTimeVerified
 	}
 	if upd.SubmissionState != nil {
-		if !isValidSubmissionState(*upd.SubmissionState) {
-			return nil, fmt.Errorf("submissionState must be one of PENDING, FAILED, SUCCESS")
-		}
 		updated.SubmissionState = *upd.SubmissionState
 	}
 
@@ -346,39 +318,25 @@ func (s *SmartContract) UpdateArtifactDetails(ctx contractapi.TransactionContext
 		updated.Links = []string{}
 	}
 
-	// Re-run create-time validations on the merged artifact
-	if l := len(strings.TrimSpace(updated.Title)); l < 3 || l > 200 {
-		return nil, fmt.Errorf("title must be between 3 and 200 characters")
+	// Re-run validations on the merged artifact (relaxed)
+	if strings.TrimSpace(updated.Title) == "" {
+		return nil, fmt.Errorf("title is required")
 	}
-	if l := len(strings.TrimSpace(updated.Description)); l < 50 || l > 3000 {
-		return nil, fmt.Errorf("description must be between 50 and 3000 characters")
-	}
-	if _, err := mail.ParseAddress(strings.TrimSpace(updated.SubmitterEmail)); err != nil {
-		return nil, fmt.Errorf("submitterEmail must be a valid email address")
-	}
-	if strings.TrimSpace(updated.SubmitterUsername) == "" {
-		return nil, fmt.Errorf("submitterUsername is required")
-	}
-	if !sha256HexPattern.MatchString(updated.Footprint) {
-		return nil, fmt.Errorf("footprint must be a 64-character lowercase hex string")
+	if strings.TrimSpace(updated.Description) == "" {
+		return nil, fmt.Errorf("description is required")
 	}
 
-	// Apply update-specific validations
+	// Apply update-specific validations (relaxed)
 	if err := validateLinks(updated.Links); err != nil {
 		return nil, err
 	}
 	if err := validateKeywords(updated.Keywords); err != nil {
 		return nil, err
 	}
-	if err := validateDois(updated.Dois); err != nil {
-		return nil, err
-	}
 	if updated.Acknowledgements != "" && len(updated.Acknowledgements) > acknowledgementsMaxLen {
 		return nil, fmt.Errorf("acknowledgements must be ≤ %d characters", acknowledgementsMaxLen)
 	}
-	if err := validateManifestItems(updated.Manifest); err != nil {
-		return nil, err
-	}
+	// If manifest is provided in update, non-empty was enforced at merge time above
 
 	// Persist
 	outBytes, err := json.Marshal(updated)
