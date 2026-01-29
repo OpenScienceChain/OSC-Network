@@ -243,7 +243,7 @@ function createOrgs() {
     while [[ $rc -ne 0 && $COUNTER -lt $MAX_RETRY ]]; do
       sleep 1
       set -x
-      fabric-ca-client getcainfo -u https://admin:adminpw@localhost:7054 --caname ca-org1 --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
+      fabric-ca-client getcainfo -u https://admin:adminpw@localhost:16054 --caname ca-org1 --tls.certfiles "${PWD}/organizations/fabric-ca/org1/ca-cert.pem"
       res=$?
     { set +x; } 2>/dev/null
     rc=$res  # Update rc

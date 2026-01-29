@@ -8,6 +8,21 @@ That is to create a network use:
 ./network.sh up -bft
 ```
 
+### Host port mappings (adjusted to avoid OSC-DEV2)
+
+To run this test network alongside the existing OSC-DEV2 network, the exposed host ports have been shifted:
+
+- Orderer: `17050` (admin `17053`, ops `19443`)
+- Peer0 Org1: `17051` (ops `19444`)
+- Peer0 Org2: `19051` (ops `19445`)
+- CouchDB Org1: `15984`
+- CouchDB Org2: `17984`
+- CA Org1: `16054` (ops `17054`)
+- CA Org2: `16554` (ops `18054`)
+- CA Orderer: `17554` (ops `19054`)
+
+Connection profiles and helper scripts have been updated to use these ports.
+
 To create a channel use:
 
 ```bash

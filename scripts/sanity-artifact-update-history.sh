@@ -101,7 +101,7 @@ generate_hex64() {
 }
 
 # Build common invoke flags for Org1
-ORDERER=localhost:7050
+ORDERER=localhost:17050
 ORDERER_TLS="--ordererTLSHostnameOverride orderer.example.com --tls --cafile $ORDERER_CA"
 PEER_ADDRS="--peerAddresses $ORG1_ADDR --tlsRootCertFiles $ORG1_TLS --peerAddresses $ORG2_ADDR --tlsRootCertFiles $ORG2_TLS"
 

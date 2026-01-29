@@ -78,15 +78,21 @@ choose_secret() {
 create_identity_json() {
   local msp_dir="$1" msp_id="$2" label="$3" out_dir="$4"
   local cert_file key_file
-  cert_file=$(ls -1 "$msp_dir/signcerts"/*.pem 2>/dev/null | head -n1 || true)
+  cert_file="$msp_dir/signcerts/cert.pem"
   key_file=$(ls -1 "$msp_dir/keystore"/* 2>/dev/null | head -n1 || true)
-  if [[ -z "${cert_file:-}" || -z "${key_file:-}" ]]; then
+  if [[ ! -f "$cert_file" || -z "${key_file:-}" ]]; then
     echo "Skipping $label ($msp_id): missing cert or key in $msp_dir" >&2
     return 1
   fi
+  # Read PEMs
   local cert key
-  cert=$(cat "$cert_file")
-  key=$(cat "$key_file")
+  cert="$(cat "$cert_file")"
+  # Basic sanity: must contain BEGIN CERTIFICATE
+  if ! grep -q -- "-----BEGIN CERTIFICATE-----" <<<"$cert"; then
+    echo "Invalid certificate for $label ($msp_id): $cert_file" >&2
+    return 1
+  fi
+  key="$(cat "$key_file")"
   mkdir -p "$out_dir"
   jq -n \
     --arg cert "$cert" \
@@ -131,9 +137,30 @@ for org_path in "${org_paths[@]}"; do
   ca_dir="$CA_ROOT_DIR/org${org_num}"
   ca_tls_cert="$ca_dir/tls-cert.pem"
   ca_name="ca-org${org_num}"
-  # test-network ports: 7054 + (n-1)*1000
-  ca_port=$((7054 + (org_num-1)*1000))
-  ca_url="https://localhost:${ca_port}"
+  # Determine CA port from generated connection profile if available
+  ccp_json="$ROOTDIR/test-network/organizations/peerOrganizations/${org_domain}/connection-org${org_num}.json"
+  ca_key="ca.org${org_num}.example.com"
+  ca_url=""
+  ca_port=""
+  if [[ -f "$ccp_json" ]] && command -v jq >/dev/null 2>&1; then
+    ca_url=$(jq -r --arg k "$ca_key" '.certificateAuthorities[$k].url' "$ccp_json" 2>/dev/null || echo "")
+    if [[ "$ca_url" =~ :([0-9]+) ]]; then
+      ca_port="${BASH_REMATCH[1]}"
+    fi
+  fi
+  # Fallback to known remapped ports (CA containers) if not found
+  if [[ -z "$ca_port" ]]; then
+    if [[ "$org_num" == "1" ]]; then
+      ca_port=16054
+    elif [[ "$org_num" == "2" ]]; then
+      ca_port=16554
+    else
+      # best-effort fallback for additional orgs
+      ca_port=$((16054 + (org_num-1)*500))
+    fi
+    ca_url="https://localhost:${ca_port}"
+    $VERBOSE && echo "Using fallback CA port for org${org_num}: ${ca_port}"
+  fi
 
   org_home="$org_path"
   users_dir="$org_path/users"
@@ -153,6 +180,37 @@ for org_path in "${org_paths[@]}"; do
   fi
   if [[ -d "$svc_user_dir/msp" ]]; then
     echo "Service user already enrolled for $org_domain: $svc_user_dir"
+    # If signcert is missing, re-enroll cleanly
+    if [[ ! -f "$svc_user_dir/msp/signcerts/cert.pem" ]]; then
+      echo "Signcert missing for $svc_name; re-enrolling..."
+      rm -rf "$svc_user_dir/msp"
+      export FABRIC_CA_CLIENT_HOME="$org_home"
+      export FABRIC_CA_CLIENT_URL="$ca_url"
+      export FABRIC_CA_CLIENT_TLS_CERTFILES="$ca_tls_cert"
+      if ! eval "fabric-ca-client enroll -u https://$svc_name:$svc_secret@localhost:${ca_port} --caname $ca_name -M \"$svc_user_dir/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR"; then
+        echo "Re-enroll failed for $svc_name" >&2
+      fi
+      # If still no signcert, register and enroll a fresh fallback label
+      if [[ ! -f "$svc_user_dir/msp/signcerts/cert.pem" ]]; then
+        echo "Attempting fallback registration for $svc_name..."
+        fallback_label="svc-org${org_num}-$(date +%s)"
+        fallback_secret="${fallback_label}pw"
+        fallback_user_dir="$users_dir/${fallback_label}@${org_domain}"
+        export FABRIC_CA_CLIENT_HOME="$org_home"
+        export FABRIC_CA_CLIENT_URL="$ca_url"
+        export FABRIC_CA_CLIENT_TLS_CERTFILES="$ca_tls_cert"
+        eval "fabric-ca-client register --caname \"$ca_name\" --id.name \"$fallback_label\" --id.secret \"$fallback_secret\" --id.type client --id.affiliation \"org${org_num}.department1\" --tls.certfiles \"$ca_tls_cert\" $REDIR" || true
+        rm -rf "$fallback_user_dir/msp"
+        eval "fabric-ca-client enroll -u https://$fallback_label:$fallback_secret@localhost:${ca_port} --caname $ca_name -M \"$fallback_user_dir/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR" || true
+        if [[ -f "$fallback_user_dir/msp/signcerts/cert.pem" ]]; then
+          svc_name="$fallback_label"
+          svc_user_dir="$fallback_user_dir"
+          $VERBOSE && echo "Fallback enrollment succeeded for $svc_name"
+        else
+          echo "Fallback enrollment failed for org${org_num}. Continuing without wallet." >&2
+        fi
+      fi
+    fi
   else
     echo "Registering service user $svc_name with $ca_name at $ca_url"
     export FABRIC_CA_CLIENT_HOME="$org_home"
@@ -167,12 +225,14 @@ for org_path in "${org_paths[@]}"; do
     fi
 
     echo "Enrolling service user $svc_name"
+    # Remove any partial MSP and enroll cleanly
+    rm -rf "$svc_user_dir/msp"
     if ! eval "fabric-ca-client enroll -u https://$svc_name:$svc_secret@localhost:${ca_port} --caname $ca_name -M \"$svc_user_dir/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR"; then
       $VERBOSE && echo "Enroll failed for $svc_name (will try fallback if needed)"
     fi
 
     # Verify enrollment produced MSP materials
-    if [[ "$reg_ok" == false || ( ! -f "$svc_user_dir/msp/signcerts/cert.pem" && -z $(ls -1 "$svc_user_dir/msp/signcerts"/*.pem 2>/dev/null | head -n1) ) ]]; then
+    if [[ "$reg_ok" == false || ! -f "$svc_user_dir/msp/signcerts/cert.pem" ]]; then
       echo "Registration or enrollment failed for $svc_name. Trying a fresh service user label..." >&2
       # Fallback: create a fresh service user label to avoid unknown prior secret
       fallback_label="svc-org${org_num}-$(date +%s)"
@@ -181,8 +241,9 @@ for org_path in "${org_paths[@]}"; do
       echo "Registering fallback user $fallback_label with $ca_name"
       eval "fabric-ca-client register --caname \"$ca_name\" --id.name \"$fallback_label\" --id.secret \"$fallback_secret\" --id.type client --id.affiliation \"org${org_num}.department1\" --tls.certfiles \"$ca_tls_cert\" $REDIR" || true
       echo "Enrolling fallback user $fallback_label"
+      rm -rf "$fallback_user_dir/msp"
       eval "fabric-ca-client enroll -u https://$fallback_label:$fallback_secret@localhost:${ca_port} --caname $ca_name -M \"$fallback_user_dir/msp\" --tls.certfiles \"$ca_tls_cert\" $REDIR" || true
-      if [[ -f "$fallback_user_dir/msp/signcerts/cert.pem" ]] || ls -1 "$fallback_user_dir/msp/signcerts"/*.pem >/dev/null 2>&1; then
+      if [[ -f "$fallback_user_dir/msp/signcerts/cert.pem" ]]; then
         svc_name="$fallback_label"
         svc_user_dir="$fallback_user_dir"
         $VERBOSE && echo "Fallback enrollment succeeded for $svc_name"
@@ -198,6 +259,12 @@ for org_path in "${org_paths[@]}"; do
   if create_identity_json "$svc_user_dir/msp" "$msp_id" "$svc_name" "$out_dir"; then
     ((num_wallets++))
     $VERBOSE && echo "Wrote wallet: $out_dir/$svc_name.id"
+    # Also write a canonical alias file that bridges commonly expect (svc-orgN.id)
+    canonical_label="svc-org${org_num}"
+    if [[ "$svc_name" != "$canonical_label" ]]; then
+      cp -f "$out_dir/$svc_name.id" "$out_dir/${canonical_label}.id"
+      $VERBOSE && echo "Also wrote canonical alias: $out_dir/${canonical_label}.id"
+    fi
   fi
 done
 

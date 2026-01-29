@@ -56,7 +56,7 @@ invoke_create() {
   fcn_call=$(jq -cn --arg arg1 "CreateArtifact" --arg arg2 "$payload_json" '{Args:[$arg1,$arg2]}')
 
   echo "Invoking CreateArtifact..."
-  peer chaincode invoke -o localhost:7050 \
+  peer chaincode invoke -o localhost:17050 \
     --ordererTLSHostnameOverride orderer.example.com \
     --tls --cafile "$ORDERER_CA" \
     -C "$CHANNEL_NAME" -n "$CC_NAME" \
