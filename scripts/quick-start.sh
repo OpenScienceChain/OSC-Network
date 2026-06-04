@@ -50,6 +50,10 @@ fi
 
 ./network.sh up -ca -s couchdb "${FABRIC_TAG_ARG[@]}" "${CA_TAG_ARG[@]}"
 
+# Wait for CouchDB to fully initialize (prevents 401 auth errors)
+echo "Waiting 15 seconds for CouchDB to stabilize..."
+sleep 15
+
 # Build arguments for channel creation
 CREATE_ARGS=( createChannel -c "$CHANNEL_NAME" )
 if [[ "$BFT" == "1" ]]; then

@@ -27,14 +27,29 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-echo "[1/4] Bringing down test network (if running)"
+echo "[1/5] Bringing down test network (if running)"
 if [[ -d "$TESTNET_DIR" && -x "$TESTNET_DIR/network.sh" ]]; then
   (cd "$TESTNET_DIR" && ./network.sh down) || true
 else
   echo "Test network not found at $TESTNET_DIR; skipping"
 fi
 
-echo "[2/4] Removing Chaincode-as-a-Service containers"
+echo "[2/5] Removing Docker volumes (prevents stale CouchDB data)"
+CLI=${CONTAINER_CLI:-docker}
+if command -v "$CLI" >/dev/null 2>&1; then
+  # Remove all volumes to ensure clean state
+  mapfile -t volumes < <($CLI volume ls -q)
+  if [[ ${#volumes[@]} -gt 0 ]]; then
+    echo "Removing ${#volumes[@]} Docker volumes..."
+    $CLI volume rm "${volumes[@]}" >/dev/null 2>&1 || true
+  else
+    echo "No Docker volumes to remove"
+  fi
+else
+  echo "Container CLI $CLI not available; skipping volume cleanup"
+fi
+
+echo "[3/5] Removing Chaincode-as-a-Service containers"
 CLI=${CONTAINER_CLI:-docker}
 if command -v "$CLI" >/dev/null 2>&1; then
   # Remove containers with names ending in _ccaas (used by deploy-ccaas) or containing cc name and ccaas
@@ -49,10 +64,10 @@ else
   echo "Container CLI $CLI not available; skipping container cleanup"
 fi
 
-echo "[3/4] Deleting wallets directory"
+echo "[4/5] Deleting wallets directory"
 rm -rf "$ROOTDIR/wallets" || true
 
-echo "[4/4] Deleting service user MSPs (svc-*) in peer orgs: $([[ "$KEEP_USERS" == true ]] && echo "skipped" || echo "enabled")"
+echo "[5/5] Deleting service user MSPs (svc-*) in peer orgs: $([[ "$KEEP_USERS" == true ]] && echo "skipped" || echo "enabled")"
 if [[ "$KEEP_USERS" == false && -d "$TESTNET_DIR/organizations/peerOrganizations" ]]; then
   find "$TESTNET_DIR/organizations/peerOrganizations" -maxdepth 3 -type d -name 'svc-*' -print -exec rm -rf {} + || true
 fi

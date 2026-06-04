@@ -252,3 +252,8 @@ function createOrderer() {
 
   cp "${PWD}/organizations/ordererOrganizations/example.com/msp/config.yaml" "${PWD}/organizations/ordererOrganizations/example.com/users/Admin@example.com/msp/config.yaml"
 }
+
+# Main execution - call all the functions
+createOrg1
+createOrg2
+createOrderer
